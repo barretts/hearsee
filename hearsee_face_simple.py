@@ -339,6 +339,11 @@ def generate_spatial_mix(landscape_img, nose_x_norm, nose_y_norm, pan_x=0, pan_y
         surround_stereo = pan_stereo(surround_tone, surround_left, surround_right)
         final_stereo = final_stereo + surround_stereo
     
+    # Normalize volume to maintain constant amplitude regardless of blending
+    max_amplitude = np.max(np.abs(final_stereo))
+    if max_amplitude > 0:
+        final_stereo = final_stereo / max_amplitude * 32767
+    
     # Clip and return
     final_stereo = np.clip(final_stereo, -32768, 32767)
     return final_stereo.astype(np.int16)
