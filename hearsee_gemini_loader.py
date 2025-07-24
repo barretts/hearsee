@@ -100,13 +100,24 @@ def get_pixel_color_from_image(img, normalized_x, normalized_y):
 
 def color_to_sound_properties(r, g, b):
     """
-    Converts an RGB color into sound properties: (frequency, amplitude, timbre_complexity)
+    Converts an RGB color into sound properties with special tuning for intuitive perception.
     """
     r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
     h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
-    frequency = MIN_FREQUENCY + (h * (MAX_FREQUENCY - MIN_FREQUENCY))
+    
+    # --- Custom Sound Mapping for a more intuitive feel ---
+    if 0.5 < h < 0.75: # If the color is in the blue/cyan range
+        # Remap the hue to a lower, calmer frequency range for a "sky" sound
+        blue_hue_normalized = (h - 0.5) / 0.25
+        frequency = MIN_FREQUENCY + (blue_hue_normalized * (MIN_FREQUENCY * 2))
+        # Reduce timbre complexity for a purer, calmer tone
+        timbre_complexity = s * 0.5 
+    else:
+        # Standard mapping for all other colors
+        frequency = MIN_FREQUENCY + (h * (MAX_FREQUENCY - MIN_FREQUENCY))
+        timbre_complexity = s
+        
     amplitude = l
-    timbre_complexity = s
     return (frequency, amplitude, timbre_complexity)
 
 def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
@@ -160,12 +171,9 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
     mixed_mono_wave = (1 - final_timbre) * pure_wave + final_timbre * complex_wave
 
     # --- "GLARE" EFFECT FOR OVERWHELMING SOUNDS ---
-    # If the sound is very bright (high amplitude) and very colorful (high timbre/saturation)
     if final_amp > 0.9 and final_timbre > 0.9:
-        # Add a second, dissonant frequency to create a shimmering, overwhelming "glare"
-        glare_freq = final_freq * 1.05 # Slightly higher frequency
+        glare_freq = final_freq * 1.05 
         glare_wave = np.sin(glare_freq * t * 2 * np.pi)
-        # Mix it in at a noticeable but not overpowering volume
         mixed_mono_wave += glare_wave * 0.4
 
     max_amplitude = np.max(np.abs(mixed_mono_wave))
@@ -173,7 +181,10 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
         mixed_mono_wave /= max_amplitude
 
     final_mono_wave_with_volume = mixed_mono_wave * final_amp * MASTER_VOLUME
-    left_vol, right_vol = (1.0 - pan_x) / 2.0, (1.0 + pan_x) / 2.0
+    
+    # --- CORRECTED STEREO PANNING ---
+    # Invert the pan value so moving right pans the sound to the left ear.
+    left_vol, right_vol = (1.0 + pan_x) / 2.0, (1.0 - pan_x) / 2.0
     
     stereo_wave = np.zeros((len(final_mono_wave_with_volume), 2), dtype=np.int16)
     stereo_wave[:, 0] = (final_mono_wave_with_volume * left_vol * 32767).astype(np.int16)
