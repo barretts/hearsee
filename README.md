@@ -1,47 +1,63 @@
-<<<<<<< HEAD
-# hearsee
-playing with the idea of visualization through sound
-=======
 # HearSee - An Image Sonification Tool 🎧
 
-HearSee is a real-time sensory substitution tool that translates visual images into an auditory soundscape. Using a webcam for face tracking or a mouse for control, users can "scan" an image and hear a rich, multi-layered representation of its colors. The goal is to create an intuitive and emotionally resonant experience, moving beyond simple technical translation to something that can be genuinely felt and understood.
+HearSee is a real-time sensory substitution tool written in Python that translates visual images into an intuitive and emotionally resonant auditory experience. Using a webcam or a static image, the application analyzes color, form, and facial expressions, converting them into a multi-layered soundscape.
 
-## ✨ Features
+The project is designed to be a flexible platform for exploring different methods of sonification, with the ultimate goal of creating a system that can help a user "hear" the key features of an image, including the mood of a landscape or the smile on a person's face.
 
-* **HSL-Based Sonification:** Colors are not just mapped to simple tones. They are translated based on the HSL (Hue, Saturation, Lightness) model:
-  * **Hue** determines the fundamental **pitch** of the sound.
-  * **Lightness** controls the **volume** (amplitude).
-  * **Saturation** adjusts the **timbre** (richness or complexity) of the sound.
-* **Dynamic Blending:** An inverse-square falloff blending system allows the user to perceive the "texture" of colors surrounding their focus point. Pixels closer to the cursor have a much stronger influence, creating a natural sense of proximity.
-* **Global Mix Mode:** Users can toggle a "Global Mix" to hear a quiet, ambient representation of the entire image's average color, layered underneath the detailed sound of their focus point. This provides both detailed exploration and overall context.
-* **Intuitive Audio Cues:** The sound model includes special tuning for a more human feel, such as a calmer, lower-frequency sound for blues and a "glare" effect for intensely bright and saturated colors.
-* **Flexible Input:**
-  * **Face Tracking:** Uses your computer's webcam and MediaPipe to track your head movement, allowing you to naturally look around an image.
-  * **Mouse Control:** If no webcam is available, the system seamlessly falls back to mouse input.
-* **Load Your Own Images:** Load any JPG or PNG image from your computer to explore its unique soundscape.
+## Core Features
 
-## 🚀 Getting Started
+* **Real-Time Sonification:** Translates images from a webcam or file into sound with minimal latency.
+* **Mouse and Face Control:** Navigate the image using either standard mouse input or by using our own face as a pointer via the webcam.
+* **Multiple Sound Models:** Switch between different modes of sound generation on the fly to explore various ways of interpreting visual data:
+    1.  **Naturalistic Model:** An intuitive mapping where color hue, saturation, and lightness control the sound's pitch, timbre, and volume.
+    2.  **Symbolic/Musical Model:** Translates colors into musical chords based on the circle of fifths, creating a more traditionally harmonic soundscape.
+    3.  **Direct Emotional Model:** Uses psychoacoustic principles to map color properties directly to sound characteristics that evoke specific emotions like joy, tension, or calm.
+* **Auditory Gestures:** The system can detect specific geometric shapes and overlay distinct sound events. Currently, it can detect smiles and represent them with a bright, upward-rising arpeggio.
+* **Contextual Audio Modes:**
+    * **Global Mix:** Toggle a mode to hear a quiet background tone representing the image's average color, providing ambient context.
+    * **Spatial Blending:** Adjust the "focus" of your auditory lens, from a sharp point to a wide, atmospheric field that blends the sounds of nearby colors.
+* **Custom Image Loading:** Load and explore any JPG or PNG image from your computer.
 
-### Prerequisites
+## Installation
 
-You will need Python 3.8 or newer. You can check your version with `python --version`.
+1.  **Clone the repository:**
+    ```bash
+    git clone <your-repo-url>
+    cd <your-repo-directory>
+    ```
+2.  **Install dependencies:** This project requires Python 3 and several libraries. You can install them using pip:
+    ```bash
+    pip install pygame numpy opencv-python mediapipe
+    ```
 
-### Installation
+## How to Use
 
-1. **Clone or download the project.**
-2. **Navigate to the project directory** in your terminal.
-3. **Install the required libraries:**
-   ```
-   pip install pygame numpy opencv-python mediapipe
+1.  **Run the script:**
+    ```bash
+    python hearsee.py
+    ```
+2.  The application will start. By default, it will attempt to use your webcam for face tracking. If no webcam is found, it will switch to mouse control.
+3.  Use your face or mouse to move the cursor around the image and listen to the sound change.
+4.  Use the keyboard controls below to change settings and models.
 
-   ```
+### Controls
 
-### Running the Application
+| Key           | Action                                                    |
+| :------------ | :-------------------------------------------------------- |
+| `Mouse`       | Controls the cursor (if no webcam is active).             |
+| `Face`        | Controls the cursor (if webcam is active).                |
+| `1`, `2`, `3` | Switch between Naturalistic, Symbolic, and Emotional models. |
+| `L`           | Load a new image from your computer.                      |
+| `G`           | Toggle the "Global Mix" background sound.                 |
+| `TAB`         | Toggle spatial audio blending on or off.                  |
+| `UP`/`DOWN`   | Adjust blending intensity.                                |
+| `LEFT`/`RIGHT`| Adjust blending radius (focus).                           |
+| `SPACE`       | Re-center the face tracking cursor.                       |
+| `\`` (Backtick) | Show or hide the detailed info panel.                     |
+| `ESC`         | Quit the application.                                     |
 
-To start the application, simply run the Python script from your terminal:
 
-```
-python hearsee.py
+## Future Development
 
 ```
 
@@ -64,4 +80,3 @@ The ambition of HearSee is to create a tool capable of conveying complex visual 
 * **Hearing a Smile:** Implementing computer vision techniques (like edge and feature detection) to translate not just color, but the *shapes* and *forms* of an image into distinct auditory cues, such as a rising pitch for the curve of a smile.
 * **Emotional Sound Palettes:** Researching and implementing more advanced sound models based on psychoacoustics to better convey emotions like joy, tension, or calm.
 * **Inclusive Design:** Developing an adaptive framework that can analyze the primary color palette of an image (e.g., different skin tones in a portrait) and adjust its sonification model to best highlight the subtle features within that specific context, ensuring the tool is effective for all users.
->>>>>>> c49346b (add readme.md)
