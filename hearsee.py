@@ -33,13 +33,37 @@ g_show_info_panel = True # Toggle for the detailed info panel
 g_active_model_index = 0 # To switch between sound models
 
 # ==============================================================================
-# 2. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.2)
+# 2. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.3)
 # ==============================================================================
 
+def generate_adsr_envelope(attack_t, decay_t, sustain_level, release_t, length):
+    """Generates an ADSR envelope as a NumPy array."""
+    if sustain_level < 0: sustain_level = 0
+    
+    attack_len = int(attack_t * length)
+    decay_len = int(decay_t * length)
+    release_len = int(release_t * length)
+    sustain_len = length - attack_len - decay_len - release_len
+    
+    if sustain_len < 0: # Handle cases where ADSR times are longer than duration
+        sustain_len = 0
+        release_len = length - attack_len - decay_len
+        if release_len < 0:
+            decay_len = length - attack_len
+            release_len = 0
+        if decay_len < 0:
+            attack_len = length
+            decay_len = 0
+
+    attack = np.linspace(0, 1, attack_len)
+    decay = np.linspace(1, sustain_level, decay_len)
+    sustain = np.full(sustain_len, sustain_level)
+    release = np.linspace(sustain_level, 0, release_len)
+    
+    return np.concatenate((attack, decay, sustain, release))
+
 class SoundModel:
-    """
-    Base class for all sound models. Handles common attributes and stereo panning.
-    """
+    """Base class for all sound models."""
     def __init__(self, name, sample_rate=44100, master_volume=0.05):
         self.name = name
         self.sample_rate = sample_rate
@@ -48,37 +72,22 @@ class SoundModel:
         self.t = np.linspace(0, self.duration, int(self.sample_rate * self.duration), False)
 
     def color_to_properties(self, r, g, b):
-        """Must be implemented by subclasses."""
         raise NotImplementedError
 
     def generate_mono_wave(self, *args):
-        """Must be implemented by subclasses."""
         raise NotImplementedError
 
     def create_stereo_wave(self, landscape_img, cursor_x, cursor_y, pan_x):
-        """Creates the final stereo sound wave based on image data and cursor position."""
         center_color_rgb = get_pixel_color_from_image(landscape_img, cursor_x, cursor_y)
         if center_color_rgb is None: center_color_rgb = (0,0,0)
         
-        center_props = self.color_to_properties(*center_color_rgb)
-        
-        # Blending Logic
-        if BLENDING_ENABLED and BLENDING_INTENSITY > 0 and BLENDING_RADIUS > 0:
-            # This logic can be complex and model-specific, but we'll use a generic property averaging for now
-            # A more advanced implementation might blend waves instead of properties
-            prop_list = [center_props]
-            # (Simplified blending for brevity - a full implementation would be more robust)
-            focused_props = np.mean(prop_list, axis=0)
-        else:
-            focused_props = center_props
+        focused_props = self.color_to_properties(*center_color_rgb)
+        focused_wave = self.generate_mono_wave(focused_props)
 
-        focused_wave = self.generate_mono_wave(*focused_props)
-
-        # Global mix logic
         if g_global_mix_enabled:
             global_color = cv2.mean(landscape_img)[:3]
             global_props = self.color_to_properties(*global_color)
-            global_wave = self.generate_mono_wave(*global_props)
+            global_wave = self.generate_mono_wave(global_props)
             mixed_mono_wave = (focused_wave * 0.7) + (global_wave * 0.3)
         else:
             mixed_mono_wave = focused_wave
@@ -108,9 +117,10 @@ class NaturalisticSoundModel(SoundModel):
             frequency = self.min_frequency + ((h - 0.5) / 0.25 * (self.min_frequency * 2))
         else:
             frequency = self.min_frequency + (h * (self.max_frequency - self.min_frequency))
-        return (frequency, l, s)
+        return {'freq': frequency, 'amp': l, 'timbre': s}
 
-    def generate_mono_wave(self, freq, amp, timbre):
+    def generate_mono_wave(self, props):
+        freq, amp, timbre = props['freq'], props['amp'], props['timbre']
         pure_wave = np.sin(freq * self.t * 2 * np.pi)
         complex_wave = (pure_wave + 0.5 * np.sin(freq * 2 * self.t * 2 * np.pi))
         mono_wave = ((1 - timbre) * pure_wave + timbre * complex_wave)
@@ -122,64 +132,74 @@ class SymbolicSoundModel(SoundModel):
     def __init__(self):
         super().__init__("Symbolic/Musical")
         self.base_freq = 110 # A2
-        self.circle_of_fifths = [0, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10, 5] # Semitones from root
+        self.circle_of_fifths = [0, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10, 5]
 
     def color_to_properties(self, r, g, b):
         r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
         h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
-        return (h, l, s)
+        return {'hue': h, 'lightness': l, 'saturation': s}
 
-    def generate_mono_wave(self, hue, lightness, saturation):
+    def generate_mono_wave(self, props):
+        hue, lightness, saturation = props['hue'], props['lightness'], props['saturation']
         key_index = int(hue * 12) % 12
         root_note_semitone = self.circle_of_fifths[key_index]
-        
-        octave = 1 + int(lightness * 3) # 3 octaves
-        
+        octave = 1 + int(lightness * 3)
         root_freq = self.base_freq * (2**(octave)) * (2**(root_note_semitone/12))
-        
-        # Determine chord type
-        # Cool colors -> minor, warm colors -> major
         is_major = (hue < 0.25 or hue > 0.75)
         third_interval = 4 if is_major else 3
         
-        # Build chord based on saturation
-        wave = np.sin(root_freq * self.t * 2 * np.pi) # Root note
-        if saturation > 0.2: # Add fifth
-            fifth_freq = root_freq * (2**(7/12))
-            wave += np.sin(fifth_freq * self.t * 2 * np.pi)
-        if saturation > 0.5: # Add third
-            third_freq = root_freq * (2**(third_interval/12))
-            wave += np.sin(third_freq * self.t * 2 * np.pi)
+        wave = np.sin(root_freq * self.t * 2 * np.pi)
+        if saturation > 0.2: wave += np.sin(root_freq * (2**(7/12)) * self.t * 2 * np.pi)
+        if saturation > 0.5: wave += np.sin(root_freq * (2**(third_interval/12)) * self.t * 2 * np.pi)
             
         return wave * lightness
 
 class EmotionalSoundModel(SoundModel):
     def __init__(self):
         super().__init__("Direct Emotional")
-        self.base_freq = 150
 
     def color_to_properties(self, r, g, b):
-        r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
-        h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
-        return (h, l, s)
+        h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+        
+        # Determine emotional profile based on color properties
+        if l > 0.7 and s > 0.5 and (h < 0.2 or h > 0.9): # Bright, saturated warm colors
+            return {
+                'emotion': 'Joy', 'pitch': 400 + l * 400, 'dissonance': 0.01,
+                'timbre_brightness': 0.8, 'adsr': (0.01, 0.2, 0.7, 0.1)
+            }
+        elif l < 0.3 and s > 0.6: # Dark, saturated colors
+            return {
+                'emotion': 'Tension', 'pitch': 150 + l * 100, 'dissonance': 0.1,
+                'timbre_brightness': 0.3, 'adsr': (0.005, 0.05, 0.1, 0.1)
+            }
+        elif s < 0.3 and l > 0.4: # Desaturated, mid-to-bright colors
+            return {
+                'emotion': 'Calm', 'pitch': 200 + l * 200, 'dissonance': 0.005,
+                'timbre_brightness': 0.2, 'adsr': (0.3, 0.2, 0.6, 0.3)
+            }
+        else: # Dark, desaturated colors
+            return {
+                'emotion': 'Sadness', 'pitch': 120 + l * 150, 'dissonance': 0.05,
+                'timbre_brightness': 0.1, 'adsr': (0.4, 0.3, 0.2, 0.4)
+            }
 
-    def generate_mono_wave(self, hue, lightness, saturation):
-        # Hue -> Dissonance
-        dissonance = 0.5 - abs(hue - 0.5) # Peaks at red (0) and purple (1), lowest at green/cyan
-        
-        freq1 = self.base_freq * (1 + lightness)
-        freq2 = freq1 * (1 + dissonance * 0.1) # More dissonance = wider interval
-        
-        wave1 = np.sin(freq1 * self.t * 2 * np.pi)
-        wave2 = np.sin(freq2 * self.t * 2 * np.pi)
-        wave = (wave1 + wave2) * 0.5
-        
-        # Saturation -> Arousal (tremolo speed)
-        tremolo_speed = 1 + saturation * 20
-        tremolo_env = 0.7 + 0.3 * np.sin(tremolo_speed * self.t * 2 * np.pi)
-        
-        return wave * tremolo_env * lightness
+    def generate_mono_wave(self, props):
+        freq = props['pitch']
+        dissonance = props['dissonance']
+        timbre_brightness = props['timbre_brightness']
+        attack, decay, sustain, release = props['adsr']
 
+        # Generate base wave with harmonics for timbre control
+        wave = np.sin(freq * self.t * 2 * np.pi)
+        for i in range(2, 6):
+            wave += (timbre_brightness / i) * np.sin(freq * i * self.t * 2 * np.pi)
+
+        # Add dissonance
+        wave += np.sin(freq * (1 + dissonance) * self.t * 2 * np.pi)
+
+        # Apply ADSR envelope
+        envelope = generate_adsr_envelope(attack, decay, sustain, release, len(self.t))
+        return wave * envelope
 
 # ==============================================================================
 # 3. UTILITY FUNCTIONS
@@ -240,7 +260,7 @@ def main():
         face_mesh, cap, face_tracking_active = None, None, False
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("HearSee - Phase 1.2")
+    pygame.display.set_caption("HearSee - Phase 1.3")
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
     
@@ -312,6 +332,11 @@ def main():
             "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)",
         }
         if g_show_info_panel:
+            # Add emotion to info panel for model 3
+            if g_active_model_index == 2:
+                props = active_model.color_to_properties(*get_pixel_color_from_image(current_image, final_cursor_x, final_cursor_y))
+                info_data.update({"Detected Emotion": props['emotion']})
+
             info_data.update({
                 "--- Controls ---": "",
                 "Blend Radius": f"{BLENDING_RADIUS:.1f} (L/R)",
