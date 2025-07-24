@@ -58,12 +58,12 @@ class FacialFeatureAnalyzer:
         mouth_width = np.linalg.norm(right_corner - left_corner)
         mouth_height = np.linalg.norm(lower_lip_center - upper_lip_center)
         
-        aspect_ratio = mouth_width / mouth_height if mouth_height > 0.5 else 0.0
+        aspect_ratio = mouth_width / mouth_height if mouth_height > 1.0 else 0.0
 
         # --- Lip Curvature (More advanced smile indicator) ---
         midpoint = (left_corner + right_corner) / 2.0
-        lip_center = (upper_lip_center + lower_lip_center) / 2.0
-        curvature = midpoint[1] - lip_center[1] # Positive if mouth curves up (Y is inverted in screen coordinates)
+        # Positive if mouth curves up (Y is inverted in screen coordinates)
+        curvature = midpoint[1] - upper_lip_center[1] 
         
         return {
             "mouth_aspect_ratio": aspect_ratio,
@@ -73,7 +73,7 @@ class FacialFeatureAnalyzer:
         }
 
 # ==============================================================================
-# 3. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.3)
+# 3. MODULAR SOUND MODEL ARCHITECTURE (Phase 2.2)
 # ==============================================================================
 
 def generate_adsr_envelope(attack_t, decay_t, sustain_level, release_t, length):
@@ -111,14 +111,35 @@ class SoundModel:
 
     def generate_mono_wave(self, *args):
         raise NotImplementedError
+    
+    def generate_smile_gesture(self):
+        """Generates a bright, upward arpeggio to signify a smile."""
+        gesture_wave = np.zeros(len(self.t))
+        # A simple C major arpeggio, played quickly
+        notes = [261.63, 329.63, 392.00, 523.25] 
+        note_duration_samples = len(self.t) // len(notes)
+        
+        for i, freq in enumerate(notes):
+            start_index = i * note_duration_samples
+            end_index = start_index + note_duration_samples
+            t_note = np.linspace(0, self.duration / len(notes), note_duration_samples, False)
+            note_wave = np.sin(freq * t_note * 2 * np.pi)
+            
+            # Apply a quick fade-out envelope to each note
+            envelope = np.linspace(1, 0, len(note_wave))**2
+            gesture_wave[start_index:end_index] = note_wave * envelope
+
+        return gesture_wave
 
     def create_stereo_wave(self, landscape_img, cursor_x, cursor_y, pan_x, facial_features=None):
         center_color_rgb = get_pixel_color_from_image(landscape_img, cursor_x, cursor_y)
         if center_color_rgb is None: center_color_rgb = (0,0,0)
         
+        # 1. Generate the base sound from color
         focused_props = self.color_to_properties(*center_color_rgb)
         focused_wave = self.generate_mono_wave(focused_props)
 
+        # 2. Mix in global sound if enabled
         if g_global_mix_enabled:
             global_color = cv2.mean(landscape_img)[:3]
             global_props = self.color_to_properties(*global_color)
@@ -127,6 +148,17 @@ class SoundModel:
         else:
             mixed_mono_wave = focused_wave
 
+        # 3. Layer in the "smile" auditory gesture if detected
+        if facial_features:
+            aspect_ratio = facial_features.get("mouth_aspect_ratio", 0)
+            curvature = facial_features.get("lip_curvature", 0)
+            # Smile thresholds (tuned for sensitivity)
+            if aspect_ratio > 2.5 and curvature > 3.0:
+                smile_gesture = self.generate_smile_gesture()
+                # Mix the gesture with the base sound
+                mixed_mono_wave += smile_gesture * 0.6 
+
+        # 4. Normalize and create stereo output
         if np.max(np.abs(mixed_mono_wave)) == 0:
              return np.zeros((len(self.t), 2), dtype=np.int16)
 
@@ -269,7 +301,7 @@ def main():
         face_mesh, cap, face_tracking_active = None, None, False
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("HearSee - Phase 2.1")
+    pygame.display.set_caption("HearSee - Phase 2.2")
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
     
@@ -343,8 +375,10 @@ def main():
         info_data = {"Active Model": f"{g_active_model_index+1}: {active_model.name}", "Global Mix": f"{'ON' if g_global_mix_enabled else 'OFF'} (G)", "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)"}
         if g_show_info_panel:
             if g_active_model_index == 2:
-                props = active_model.color_to_properties(*get_pixel_color_from_image(current_image, final_cursor_x, final_cursor_y))
-                info_data.update({"Detected Emotion": props['emotion']})
+                color_props = get_pixel_color_from_image(current_image, final_cursor_x, final_cursor_y)
+                if color_props is not None:
+                    props = active_model.color_to_properties(*color_props)
+                    info_data.update({"Detected Emotion": props['emotion']})
             if facial_features:
                  info_data.update({"--- Face Features ---": "", "Mouth Aspect Ratio": f"{facial_features.get('mouth_aspect_ratio', 0):.2f}", "Lip Curvature": f"{facial_features.get('lip_curvature', 0):.2f}"})
             info_data.update({"--- Controls ---": "", "Blend Radius": f"{BLENDING_RADIUS:.1f} (L/R)", "Blend Intensity": f"{BLENDING_INTENSITY:.1f} (U/D)", "--- Cursor Info ---": "", "Position": f"({final_cursor_x:.2f}, {final_cursor_y:.2f})"})
