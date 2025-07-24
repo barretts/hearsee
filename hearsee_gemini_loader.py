@@ -32,7 +32,7 @@ SMOOTHING_FACTOR = 0.3
 MOVEMENT_SCALE = 5.0
 BLENDING_ENABLED = True
 BLENDING_INTENSITY = 1.0
-BLENDING_RADIUS = 2.0 # Default radius, can be increased up to 20 now.
+BLENDING_RADIUS = 2.0 # Default radius, can be increased up to 40 now.
 
 # --- Global variables ---
 g_smooth_cursor_x, g_smooth_cursor_y = 0.5, 0.5
@@ -53,7 +53,6 @@ def generate_child_landscape():
     CRAYON_HOUSE_BROWN = (160, 82, 45)
 
     # Convert RGB tuples to BGR for OpenCV drawing functions
-    # (OpenCV expects colors in Blue, Green, Red order, so we reverse the tuples)
     SKY_BGR = CRAYON_SKY_BLUE[::-1]
     SUN_BGR = CRAYON_SUN_YELLOW[::-1]
     GRASS_BGR = CRAYON_GRASS_GREEN[::-1] 
@@ -62,7 +61,6 @@ def generate_child_landscape():
 
     img = np.zeros((256, 256, 3), dtype=np.uint8)
     
-    # Draw shapes using the corrected BGR colors
     img[0:154, :] = SKY_BGR
     cv2.circle(img, (200, 60), 25, SUN_BGR, -1)
     img[154:230, :] = GRASS_BGR
@@ -120,15 +118,12 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
     final_freq, final_amp, final_timbre = center_freq, center_amp, center_timbre
 
     if BLENDING_ENABLED and BLENDING_INTENSITY > 0 and BLENDING_RADIUS > 0:
-        # We will store properties with their calculated weights.
-        # The center point has the maximum weight.
-        weighted_properties = [(center_freq, center_amp, center_timbre, 1.0)] # (freq, amp, timbre, weight)
+        weighted_properties = [(center_freq, center_amp, center_timbre, 1.0)] 
         
         pixel_size_norm = 1.0 / landscape_img.shape[0]
-        max_dist_pixels = int(BLENDING_RADIUS * 4) # Sampling range based on radius
+        max_dist_pixels = int(BLENDING_RADIUS * 4)
 
         for i in range(1, max_dist_pixels + 1):
-            # Sample in a circular pattern for more natural blending
             for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
                 dx_step = int(i * np.cos(angle))
                 dy_step = int(i * np.sin(angle))
@@ -140,22 +135,16 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
                 if surround_color_rgb is not None:
                     distance_sq = dx_step**2 + dy_step**2
                     if distance_sq == 0: continue
-
-                    # INVERSE SQUARE LAW: Weight is inversely proportional to the square of the distance.
-                    # This makes nearby colors much more influential than distant ones.
                     weight = 1.0 / distance_sq
-                    
                     props = color_to_sound_properties(*surround_color_rgb)
                     weighted_properties.append((*props, weight))
 
-        # Calculate the weighted average of all collected properties.
         total_weight = sum(p[3] for p in weighted_properties)
         if total_weight > 0:
             w_avg_freq = sum(p[0] * p[3] for p in weighted_properties) / total_weight
             w_avg_amp = sum(p[1] * p[3] for p in weighted_properties) / total_weight
             w_avg_timbre = sum(p[2] * p[3] for p in weighted_properties) / total_weight
-
-            # The final sound is a mix of the center and the weighted average of the surroundings.
+            
             final_freq = (center_freq + w_avg_freq * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
             final_amp = (center_amp + w_avg_amp * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
             final_timbre = (center_timbre + w_avg_timbre * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
@@ -169,6 +158,15 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
                     0.5 * np.sin(final_freq * 2 * t * 2 * np.pi) + 
                     0.3 * np.sin(final_freq * 3 * t * 2 * np.pi))
     mixed_mono_wave = (1 - final_timbre) * pure_wave + final_timbre * complex_wave
+
+    # --- "GLARE" EFFECT FOR OVERWHELMING SOUNDS ---
+    # If the sound is very bright (high amplitude) and very colorful (high timbre/saturation)
+    if final_amp > 0.9 and final_timbre > 0.9:
+        # Add a second, dissonant frequency to create a shimmering, overwhelming "glare"
+        glare_freq = final_freq * 1.05 # Slightly higher frequency
+        glare_wave = np.sin(glare_freq * t * 2 * np.pi)
+        # Mix it in at a noticeable but not overpowering volume
+        mixed_mono_wave += glare_wave * 0.4
 
     max_amplitude = np.max(np.abs(mixed_mono_wave))
     if max_amplitude > 0:
@@ -245,6 +243,7 @@ def main():
                 elif event.key == pygame.K_SPACE and face_tracking_active:
                     ret, frame = cap.read()
                     if ret:
+                        frame = cv2.flip(frame, 1)
                         results = face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                         if results.multi_face_landmarks:
                             face_x, face_y = get_face_position(results.multi_face_landmarks[0].landmark)
@@ -254,7 +253,7 @@ def main():
                 elif event.key == pygame.K_TAB: BLENDING_ENABLED = not BLENDING_ENABLED
                 elif event.key == pygame.K_UP: BLENDING_INTENSITY = min(BLENDING_INTENSITY + 0.2, 5.0)
                 elif event.key == pygame.K_DOWN: BLENDING_INTENSITY = max(BLENDING_INTENSITY - 0.2, 0.0)
-                elif event.key == pygame.K_RIGHT: BLENDING_RADIUS = min(BLENDING_RADIUS + 0.5, 20.0) # Increased limit
+                elif event.key == pygame.K_RIGHT: BLENDING_RADIUS = min(BLENDING_RADIUS + 0.5, 40.0) # Increased limit
                 elif event.key == pygame.K_LEFT: BLENDING_RADIUS = max(BLENDING_RADIUS - 0.5, 0.0)
 
         cursor_target_x, cursor_target_y = g_smooth_cursor_x, g_smooth_cursor_y
