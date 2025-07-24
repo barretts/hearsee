@@ -37,7 +37,7 @@ BLENDING_RADIUS = 2.0 # Default radius, can be increased up to 40 now.
 # --- Global variables ---
 g_smooth_cursor_x, g_smooth_cursor_y = 0.5, 0.5
 g_center_offset_x, g_center_offset_y = 0.0, 0.0
-
+g_global_view_enabled = False # Flag for the new global view mode
 
 # ==============================================================================
 # 2. IMAGE AND COLOR-TO-SOUND CONVERSION (HSL-BASED)
@@ -107,13 +107,10 @@ def color_to_sound_properties(r, g, b):
     
     # --- Custom Sound Mapping for a more intuitive feel ---
     if 0.5 < h < 0.75: # If the color is in the blue/cyan range
-        # Remap the hue to a lower, calmer frequency range for a "sky" sound
         blue_hue_normalized = (h - 0.5) / 0.25
         frequency = MIN_FREQUENCY + (blue_hue_normalized * (MIN_FREQUENCY * 2))
-        # Reduce timbre complexity for a purer, calmer tone
         timbre_complexity = s * 0.5 
     else:
-        # Standard mapping for all other colors
         frequency = MIN_FREQUENCY + (h * (MAX_FREQUENCY - MIN_FREQUENCY))
         timbre_complexity = s
         
@@ -122,43 +119,61 @@ def color_to_sound_properties(r, g, b):
 
 def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
     """
-    Creates the final stereo sound wave, blending surrounding colors with an inverse square falloff.
+    Creates the final stereo sound wave, either from a focused point or the global average.
     """
-    center_color_rgb = get_pixel_color_from_image(landscape_img, cursor_x, cursor_y)
-    center_freq, center_amp, center_timbre = color_to_sound_properties(*center_color_rgb)
-    final_freq, final_amp, final_timbre = center_freq, center_amp, center_timbre
-
-    if BLENDING_ENABLED and BLENDING_INTENSITY > 0 and BLENDING_RADIUS > 0:
-        weighted_properties = [(center_freq, center_amp, center_timbre, 1.0)] 
+    if g_global_view_enabled:
+        # --- GLOBAL VIEW LOGIC ---
+        # Sample a grid across the image to get the average sound properties.
+        avg_props = {'freq': [], 'amp': [], 'timbre': []}
+        num_samples = 20
+        for y_sample in np.linspace(0, 1, num_samples, endpoint=False):
+            for x_sample in np.linspace(0, 1, num_samples, endpoint=False):
+                color_rgb = get_pixel_color_from_image(landscape_img, x_sample, y_sample)
+                freq, amp, timbre = color_to_sound_properties(*color_rgb)
+                avg_props['freq'].append(freq)
+                avg_props['amp'].append(amp)
+                avg_props['timbre'].append(timbre)
         
-        pixel_size_norm = 1.0 / landscape_img.shape[0]
-        max_dist_pixels = int(BLENDING_RADIUS * 4)
+        final_freq = np.mean(avg_props['freq']) if avg_props['freq'] else MIN_FREQUENCY
+        final_amp = np.mean(avg_props['amp']) if avg_props['amp'] else 0
+        final_timbre = np.mean(avg_props['timbre']) if avg_props['timbre'] else 0
+        pan_x = 0 # No panning in global view
 
-        for i in range(1, max_dist_pixels + 1):
-            for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
-                dx_step = int(i * np.cos(angle))
-                dy_step = int(i * np.sin(angle))
-                
-                sample_x = cursor_x + (dx_step * pixel_size_norm)
-                sample_y = cursor_y + (dy_step * pixel_size_norm)
-                
-                surround_color_rgb = get_pixel_color_from_image(landscape_img, sample_x, sample_y)
-                if surround_color_rgb is not None:
-                    distance_sq = dx_step**2 + dy_step**2
-                    if distance_sq == 0: continue
-                    weight = 1.0 / distance_sq
-                    props = color_to_sound_properties(*surround_color_rgb)
-                    weighted_properties.append((*props, weight))
+    else:
+        # --- FOCUSED VIEW LOGIC ---
+        center_color_rgb = get_pixel_color_from_image(landscape_img, cursor_x, cursor_y)
+        center_freq, center_amp, center_timbre = color_to_sound_properties(*center_color_rgb)
+        final_freq, final_amp, final_timbre = center_freq, center_amp, center_timbre
 
-        total_weight = sum(p[3] for p in weighted_properties)
-        if total_weight > 0:
-            w_avg_freq = sum(p[0] * p[3] for p in weighted_properties) / total_weight
-            w_avg_amp = sum(p[1] * p[3] for p in weighted_properties) / total_weight
-            w_avg_timbre = sum(p[2] * p[3] for p in weighted_properties) / total_weight
-            
-            final_freq = (center_freq + w_avg_freq * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
-            final_amp = (center_amp + w_avg_amp * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
-            final_timbre = (center_timbre + w_avg_timbre * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
+        if BLENDING_ENABLED and BLENDING_INTENSITY > 0 and BLENDING_RADIUS > 0:
+            weighted_properties = [(center_freq, center_amp, center_timbre, 1.0)] 
+            pixel_size_norm = 1.0 / landscape_img.shape[0]
+            max_dist_pixels = int(BLENDING_RADIUS * 4)
+
+            for i in range(1, max_dist_pixels + 1):
+                for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+                    dx_step = int(i * np.cos(angle))
+                    dy_step = int(i * np.sin(angle))
+                    sample_x = cursor_x + (dx_step * pixel_size_norm)
+                    sample_y = cursor_y + (dy_step * pixel_size_norm)
+                    
+                    surround_color_rgb = get_pixel_color_from_image(landscape_img, sample_x, sample_y)
+                    if surround_color_rgb is not None:
+                        distance_sq = dx_step**2 + dy_step**2
+                        if distance_sq == 0: continue
+                        weight = 1.0 / distance_sq
+                        props = color_to_sound_properties(*surround_color_rgb)
+                        weighted_properties.append((*props, weight))
+
+            total_weight = sum(p[3] for p in weighted_properties)
+            if total_weight > 0:
+                w_avg_freq = sum(p[0] * p[3] for p in weighted_properties) / total_weight
+                w_avg_amp = sum(p[1] * p[3] for p in weighted_properties) / total_weight
+                w_avg_timbre = sum(p[2] * p[3] for p in weighted_properties) / total_weight
+                
+                final_freq = (center_freq + w_avg_freq * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
+                final_amp = (center_amp + w_avg_amp * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
+                final_timbre = (center_timbre + w_avg_timbre * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
 
     if final_amp <= 0.01:
         return np.zeros((int(SAMPLE_RATE * DURATION), 2), dtype=np.int16)
@@ -170,7 +185,6 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
                     0.3 * np.sin(final_freq * 3 * t * 2 * np.pi))
     mixed_mono_wave = (1 - final_timbre) * pure_wave + final_timbre * complex_wave
 
-    # --- "GLARE" EFFECT FOR OVERWHELMING SOUNDS ---
     if final_amp > 0.9 and final_timbre > 0.9:
         glare_freq = final_freq * 1.05 
         glare_wave = np.sin(glare_freq * t * 2 * np.pi)
@@ -182,8 +196,6 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
 
     final_mono_wave_with_volume = mixed_mono_wave * final_amp * MASTER_VOLUME
     
-    # --- CORRECTED STEREO PANNING ---
-    # Invert the pan value so moving right pans the sound to the left ear.
     left_vol, right_vol = (1.0 + pan_x) / 2.0, (1.0 - pan_x) / 2.0
     
     stereo_wave = np.zeros((len(final_mono_wave_with_volume), 2), dtype=np.int16)
@@ -191,7 +203,6 @@ def create_mixed_audio_wave(landscape_img, cursor_x, cursor_y, pan_x):
     stereo_wave[:, 1] = (final_mono_wave_with_volume * right_vol * 32767).astype(np.int16)
     
     return stereo_wave
-
 
 # ==============================================================================
 # 3. FACE TRACKING AND UTILITIES
@@ -216,7 +227,7 @@ def draw_info_panel(screen, font, data):
 
 def main():
     global g_smooth_cursor_x, g_smooth_cursor_y, g_center_offset_x, g_center_offset_y
-    global BLENDING_INTENSITY, BLENDING_RADIUS, BLENDING_ENABLED
+    global BLENDING_INTENSITY, BLENDING_RADIUS, BLENDING_ENABLED, g_global_view_enabled
     
     try:
         mp_face_mesh = mp.solutions.face_mesh
@@ -251,6 +262,9 @@ def main():
                     if new_image is not None:
                         current_image = new_image
                         print("✅ New image loaded.")
+                elif event.key == pygame.K_g:
+                    g_global_view_enabled = not g_global_view_enabled
+                    print(f"Global View Mode: {'ON' if g_global_view_enabled else 'OFF'}")
                 elif event.key == pygame.K_SPACE and face_tracking_active:
                     ret, frame = cap.read()
                     if ret:
@@ -264,26 +278,28 @@ def main():
                 elif event.key == pygame.K_TAB: BLENDING_ENABLED = not BLENDING_ENABLED
                 elif event.key == pygame.K_UP: BLENDING_INTENSITY = min(BLENDING_INTENSITY + 0.2, 5.0)
                 elif event.key == pygame.K_DOWN: BLENDING_INTENSITY = max(BLENDING_INTENSITY - 0.2, 0.0)
-                elif event.key == pygame.K_RIGHT: BLENDING_RADIUS = min(BLENDING_RADIUS + 0.5, 40.0) # Increased limit
+                elif event.key == pygame.K_RIGHT: BLENDING_RADIUS = min(BLENDING_RADIUS + 0.5, 40.0) 
                 elif event.key == pygame.K_LEFT: BLENDING_RADIUS = max(BLENDING_RADIUS - 0.5, 0.0)
 
-        cursor_target_x, cursor_target_y = g_smooth_cursor_x, g_smooth_cursor_y
-        if face_tracking_active:
-            ret, frame = cap.read()
-            if ret:
-                frame = cv2.flip(frame, 1)
-                results = face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                if results.multi_face_landmarks:
-                    face_x, face_y = get_face_position(results.multi_face_landmarks[0].landmark)
-                    calibrated_x = (face_x - g_center_offset_x - 0.5) * MOVEMENT_SCALE + 0.5
-                    calibrated_y = (face_y - g_center_offset_y - 0.5) * MOVEMENT_SCALE + 0.5
-                    cursor_target_x, cursor_target_y = calibrated_x, calibrated_y
-        else:
-            mouse_x, mouse_y = pygame.mouse.get_pos()
-            cursor_target_x, cursor_target_y = mouse_x / WINDOW_WIDTH, mouse_y / WINDOW_HEIGHT
+        if not g_global_view_enabled:
+            cursor_target_x, cursor_target_y = g_smooth_cursor_x, g_smooth_cursor_y
+            if face_tracking_active:
+                ret, frame = cap.read()
+                if ret:
+                    frame = cv2.flip(frame, 1)
+                    results = face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    if results.multi_face_landmarks:
+                        face_x, face_y = get_face_position(results.multi_face_landmarks[0].landmark)
+                        calibrated_x = (face_x - g_center_offset_x - 0.5) * MOVEMENT_SCALE + 0.5
+                        calibrated_y = (face_y - g_center_offset_y - 0.5) * MOVEMENT_SCALE + 0.5
+                        cursor_target_x, cursor_target_y = calibrated_x, calibrated_y
+            else:
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                cursor_target_x, cursor_target_y = mouse_x / WINDOW_WIDTH, mouse_y / WINDOW_HEIGHT
 
-        g_smooth_cursor_x = smooth_value(g_smooth_cursor_x, cursor_target_x, SMOOTHING_FACTOR)
-        g_smooth_cursor_y = smooth_value(g_smooth_cursor_y, cursor_target_y, SMOOTHING_FACTOR)
+            g_smooth_cursor_x = smooth_value(g_smooth_cursor_x, cursor_target_x, SMOOTHING_FACTOR)
+            g_smooth_cursor_y = smooth_value(g_smooth_cursor_y, cursor_target_y, SMOOTHING_FACTOR)
+        
         final_cursor_x = np.clip(g_smooth_cursor_x, 0.0, 1.0)
         final_cursor_y = np.clip(g_smooth_cursor_y, 0.0, 1.0)
 
@@ -296,11 +312,12 @@ def main():
         landscape_surface = pygame.surfarray.make_surface(np.transpose(current_image, (1, 0, 2)))
         screen.blit(pygame.transform.scale(landscape_surface, (WINDOW_WIDTH, WINDOW_HEIGHT)), (0, 0))
 
-        cursor_pixel_x = int(final_cursor_x * WINDOW_WIDTH)
-        cursor_pixel_y = int(final_cursor_y * WINDOW_HEIGHT)
-        pygame.draw.line(screen, (255,255,255), (cursor_pixel_x - 10, cursor_pixel_y), (cursor_pixel_x + 10, cursor_pixel_y), 3)
-        pygame.draw.line(screen, (255,255,255), (cursor_pixel_x, cursor_pixel_y - 10), (cursor_pixel_x, cursor_pixel_y + 10), 3)
-        pygame.draw.circle(screen, (255,255,255), (cursor_pixel_x, cursor_pixel_y), 12, 2)
+        if not g_global_view_enabled:
+            cursor_pixel_x = int(final_cursor_x * WINDOW_WIDTH)
+            cursor_pixel_y = int(final_cursor_y * WINDOW_HEIGHT)
+            pygame.draw.line(screen, (255,255,255), (cursor_pixel_x - 10, cursor_pixel_y), (cursor_pixel_x + 10, cursor_pixel_y), 3)
+            pygame.draw.line(screen, (255,255,255), (cursor_pixel_x, cursor_pixel_y - 10), (cursor_pixel_x, cursor_pixel_y + 10), 3)
+            pygame.draw.circle(screen, (255,255,255), (cursor_pixel_x, cursor_pixel_y), 12, 2)
 
         rgb_color = get_pixel_color_from_image(current_image, final_cursor_x, final_cursor_y)
         h, l, s = colorsys.rgb_to_hls(rgb_color[0]/255.0, rgb_color[1]/255.0, rgb_color[2]/255.0)
@@ -309,9 +326,10 @@ def main():
             "HUE (Pitch)": f"{h:.2f}",
             "LIGHTNESS (Volume)": f"{l:.2f}",
             "SATURATION (Timbre)": f"{s:.2f}",
-            "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)",
+            "Global View": f"{'ON' if g_global_view_enabled else 'OFF'} (G)",
+            "Blending": f"{'ON' if BLENDING_ENABLED and not g_global_view_enabled else 'OFF'} (TAB)",
             "Blend Radius": f"{BLENDING_RADIUS:.1f} (LEFT/RIGHT)",
-            "Status": "Face Tracking" if face_tracking_active else "Mouse Control (L to Load Image)"
+            "Status": "Face Tracking" if face_tracking_active else "Mouse Control"
         }
         draw_info_panel(screen, font, info_data)
         
