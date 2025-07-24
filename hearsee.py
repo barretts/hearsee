@@ -29,6 +29,7 @@ BLENDING_RADIUS = 2.0
 g_smooth_cursor_x, g_smooth_cursor_y = 0.5, 0.5
 g_center_offset_x, g_center_offset_y = 0.0, 0.0
 g_global_mix_enabled = False
+g_show_info_panel = True # Toggle for the detailed info panel
 
 # ==============================================================================
 # 2. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.1)
@@ -119,8 +120,6 @@ class SoundModel:
 
         # Global mix logic
         if g_global_mix_enabled:
-            # For simplicity in this refactor, we can approximate the global sound
-            # A full implementation would average properties as before
             global_color = cv2.mean(landscape_img)[:3]
             global_props = self.color_to_properties(*global_color)
             global_wave = self.generate_mono_wave(*global_props)
@@ -134,7 +133,9 @@ class SoundModel:
         normalized_wave = mixed_mono_wave / np.max(np.abs(mixed_mono_wave))
         final_wave = normalized_wave * self.master_volume * 32767
 
-        left_vol, right_vol = (1.0 + pan_x) / 2.0, (1.0 - pan_x) / 2.0
+        # Corrected stereo panning
+        left_vol = (1.0 - pan_x) / 2.0
+        right_vol = (1.0 + pan_x) / 2.0
         stereo_wave = np.zeros((len(self.t), 2), dtype=np.int16)
         stereo_wave[:, 0] = (final_wave * left_vol).astype(np.int16)
         stereo_wave[:, 1] = (final_wave * right_vol).astype(np.int16)
@@ -145,11 +146,52 @@ class SoundModel:
 # ==============================================================================
 
 def generate_child_landscape():
+    """Generate a 256x256 child landscape image with a house."""
     img = np.zeros((256, 256, 3), dtype=np.uint8)
-    img[0:154, :] = (135, 206, 235) # Sky
-    cv2.circle(img, (200, 60), 25, (255, 255, 0), -1) # Sun
-    img[154:230, :] = (34, 139, 34) # Grass
-    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    
+    # Define colors in RGB
+    SKY_BLUE = (135, 206, 235)
+    SUN_YELLOW = (255, 255, 0)
+    GRASS_GREEN = (34, 139, 34)
+    GROUND_BROWN = (139, 69, 19)
+    HOUSE_BROWN = (160, 82, 45)
+    DOOR_BLACK = (50, 50, 50)
+    CHIMNEY_BROWN = (101, 67, 33)
+
+    # Sky
+    img[0:154, :] = SKY_BLUE
+    
+    # Sun
+    cv2.circle(img, (200, 60), 25, SUN_YELLOW, -1)
+    
+    # Grass
+    img[154:230, :] = GRASS_GREEN
+    
+    # Ground
+    img[230:256, :] = GROUND_BROWN
+    
+    # House
+    house_x, house_y = 128, 180
+    house_width, house_height = 60, 40
+    
+    # House body (rectangle)
+    cv2.rectangle(img, (house_x - house_width//2, house_y), (house_x + house_width//2, house_y + house_height), HOUSE_BROWN, -1)
+    
+    # Roof (triangle)
+    roof_points = np.array([
+        [house_x, house_y-20],
+        [house_x-house_width//2, house_y],
+        [house_x+house_width//2, house_y]
+    ], np.int32)
+    cv2.fillPoly(img, [roof_points], HOUSE_BROWN)
+    
+    # Door
+    cv2.rectangle(img, (house_x - 6, house_y + 10), (house_x + 6, house_y + 35), DOOR_BLACK, -1)
+    
+    # Chimney
+    cv2.rectangle(img, (house_x + 15, house_y - 35), (house_x + 23, house_y), CHIMNEY_BROWN, -1)
+    
+    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR) # Convert to BGR for OpenCV compatibility
 
 def load_image_from_file():
     root = Tk()
@@ -172,7 +214,7 @@ def smooth_value(current, target, factor):
 def draw_info_panel(screen, font, data):
     y_offset = 10
     for key, value in data.items():
-        text_surface = font.render(f"{key}: {value}", True, (255, 255, 255))
+        text_surface = font.render(f"{key}: {value}", True, (255, 255, 255), (0,0,0,128))
         screen.blit(text_surface, (10, y_offset))
         y_offset += 25
 
@@ -182,7 +224,7 @@ def draw_info_panel(screen, font, data):
 
 def main():
     global g_smooth_cursor_x, g_smooth_cursor_y, g_center_offset_x, g_center_offset_y
-    global BLENDING_INTENSITY, BLENDING_RADIUS, BLENDING_ENABLED, g_global_mix_enabled
+    global BLENDING_INTENSITY, BLENDING_RADIUS, BLENDING_ENABLED, g_global_mix_enabled, g_show_info_panel
     
     try:
         mp_face_mesh = mp.solutions.face_mesh
@@ -197,9 +239,7 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
     
-    # --- Initialize the sound model ---
     sound_model = SoundModel()
-    
     current_image = cv2.cvtColor(generate_child_landscape(), cv2.COLOR_BGR2RGB)
 
     running = True
@@ -212,6 +252,7 @@ def main():
                     new_image = load_image_from_file()
                     if new_image is not None: current_image = new_image
                 elif event.key == pygame.K_g: g_global_mix_enabled = not g_global_mix_enabled
+                elif event.key == pygame.K_BACKQUOTE: g_show_info_panel = not g_show_info_panel
                 elif event.key == pygame.K_SPACE and face_tracking_active:
                     ret, frame = cap.read()
                     if ret:
@@ -220,14 +261,12 @@ def main():
                             face_x, face_y = results.multi_face_landmarks[0].landmark[1].x, results.multi_face_landmarks[0].landmark[1].y
                             g_center_offset_x, g_center_offset_y = face_x - 0.5, face_y - 0.5
                     g_smooth_cursor_x, g_smooth_cursor_y = 0.5, 0.5
-                # Other key events...
                 elif event.key == pygame.K_TAB: BLENDING_ENABLED = not BLENDING_ENABLED
                 elif event.key == pygame.K_UP: BLENDING_INTENSITY = min(BLENDING_INTENSITY + 0.2, 5.0)
                 elif event.key == pygame.K_DOWN: BLENDING_INTENSITY = max(BLENDING_INTENSITY - 0.2, 0.0)
                 elif event.key == pygame.K_RIGHT: BLENDING_RADIUS = min(BLENDING_RADIUS + 0.5, 40.0) 
                 elif event.key == pygame.K_LEFT: BLENDING_RADIUS = max(BLENDING_RADIUS - 0.5, 0.0)
 
-        # --- Input handling (face or mouse) ---
         cursor_target_x, cursor_target_y = g_smooth_cursor_x, g_smooth_cursor_y
         if face_tracking_active:
             ret, frame = cap.read()
@@ -246,25 +285,36 @@ def main():
         final_cursor_x = np.clip(g_smooth_cursor_x, 0.0, 1.0)
         final_cursor_y = np.clip(g_smooth_cursor_y, 0.0, 1.0)
         
-        # --- Generate and play sound using the sound model ---
         pan_value = (final_cursor_x - 0.5) * 2.0
         audio_wave = sound_model.create_stereo_wave(current_image, final_cursor_x, final_cursor_y, pan_value)
         sound = pygame.sndarray.make_sound(audio_wave)
         sound.play()
 
-        # --- Drawing and UI ---
         screen.fill((0,0,0))
         img_surface = pygame.surfarray.make_surface(np.transpose(current_image, (1, 0, 2)))
         screen.blit(pygame.transform.scale(img_surface, (WINDOW_WIDTH, WINDOW_HEIGHT)), (0, 0))
         
         cursor_px, cursor_py = int(final_cursor_x * WINDOW_WIDTH), int(final_cursor_y * WINDOW_HEIGHT)
         pygame.draw.circle(screen, (255,255,255), (cursor_px, cursor_py), 12, 2)
+        pygame.draw.circle(screen, (0,0,0), (cursor_px, cursor_py), 14, 1)
 
-        draw_info_panel(screen, font, {
+        info_data = {
             "Active Model": "1: Naturalistic",
             "Global Mix": f"{'ON' if g_global_mix_enabled else 'OFF'} (G)",
             "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)",
-        })
+        }
+        if g_show_info_panel:
+            info_data.update({
+                "--- Controls ---": " ",
+                "Blend Radius": f"{BLENDING_RADIUS:.1f} (L/R)",
+                "Blend Intensity": f"{BLENDING_INTENSITY:.1f} (U/D)",
+                "--- Cursor Info ---": " ",
+                "Position": f"({final_cursor_x:.2f}, {final_cursor_y:.2f})",
+            })
+            if face_tracking_active:
+                info_data.update({ "Center Offset": f"({g_center_offset_x:.2f}, {g_center_offset_y:.2f}) (SPACE)"})
+        
+        draw_info_panel(screen, font, info_data)
         
         pygame.display.flip()
         clock.tick(30)
