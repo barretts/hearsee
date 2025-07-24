@@ -33,7 +33,47 @@ g_show_info_panel = True # Toggle for the detailed info panel
 g_active_model_index = 0 # To switch between sound models
 
 # ==============================================================================
-# 2. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.3)
+# 2. FEATURE EXTRACTION (Phase 2.1)
+# ==============================================================================
+class FacialFeatureAnalyzer:
+    """Analyzes facial landmarks to extract geometric features like smile metrics."""
+    def _get_landmark_pos(self, landmarks, index, width, height):
+        """Helper to get a landmark's position in pixel coordinates."""
+        if index < 0 or index >= len(landmarks):
+            return np.array([0, 0])
+        lm = landmarks[index]
+        return np.array([lm.x * width, lm.y * height])
+
+    def analyze(self, landmarks, width, height):
+        """Calculates various facial features from a list of landmarks."""
+        if not landmarks:
+            return None
+
+        # --- Mouth Aspect Ratio (Smile Indicator) ---
+        left_corner = self._get_landmark_pos(landmarks, 61, width, height)
+        right_corner = self._get_landmark_pos(landmarks, 291, width, height)
+        upper_lip_center = self._get_landmark_pos(landmarks, 13, width, height)
+        lower_lip_center = self._get_landmark_pos(landmarks, 14, width, height)
+        
+        mouth_width = np.linalg.norm(right_corner - left_corner)
+        mouth_height = np.linalg.norm(lower_lip_center - upper_lip_center)
+        
+        aspect_ratio = mouth_width / mouth_height if mouth_height > 0.5 else 0.0
+
+        # --- Lip Curvature (More advanced smile indicator) ---
+        midpoint = (left_corner + right_corner) / 2.0
+        lip_center = (upper_lip_center + lower_lip_center) / 2.0
+        curvature = midpoint[1] - lip_center[1] # Positive if mouth curves up (Y is inverted in screen coordinates)
+        
+        return {
+            "mouth_aspect_ratio": aspect_ratio,
+            "mouth_width": mouth_width,
+            "mouth_height": mouth_height,
+            "lip_curvature": curvature
+        }
+
+# ==============================================================================
+# 3. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.3)
 # ==============================================================================
 
 def generate_adsr_envelope(attack_t, decay_t, sustain_level, release_t, length):
@@ -46,19 +86,14 @@ def generate_adsr_envelope(attack_t, decay_t, sustain_level, release_t, length):
     sustain_len = length - attack_len - decay_len - release_len
     
     if sustain_len < 0: # Handle cases where ADSR times are longer than duration
-        sustain_len = 0
-        release_len = length - attack_len - decay_len
-        if release_len < 0:
-            decay_len = length - attack_len
-            release_len = 0
-        if decay_len < 0:
-            attack_len = length
-            decay_len = 0
+        sustain_len = 0; release_len = length - attack_len - decay_len
+        if release_len < 0: decay_len = length - attack_len; release_len = 0
+        if decay_len < 0: attack_len = length; decay_len = 0
 
-    attack = np.linspace(0, 1, attack_len)
-    decay = np.linspace(1, sustain_level, decay_len)
-    sustain = np.full(sustain_len, sustain_level)
-    release = np.linspace(sustain_level, 0, release_len)
+    attack = np.linspace(0, 1, attack_len) if attack_len > 0 else np.array([])
+    decay = np.linspace(1, sustain_level, decay_len) if decay_len > 0 else np.array([])
+    sustain = np.full(sustain_len, sustain_level) if sustain_len > 0 else np.array([])
+    release = np.linspace(sustain_level, 0, release_len) if release_len > 0 else np.array([])
     
     return np.concatenate((attack, decay, sustain, release))
 
@@ -77,7 +112,7 @@ class SoundModel:
     def generate_mono_wave(self, *args):
         raise NotImplementedError
 
-    def create_stereo_wave(self, landscape_img, cursor_x, cursor_y, pan_x):
+    def create_stereo_wave(self, landscape_img, cursor_x, cursor_y, pan_x, facial_features=None):
         center_color_rgb = get_pixel_color_from_image(landscape_img, cursor_x, cursor_y)
         if center_color_rgb is None: center_color_rgb = (0,0,0)
         
@@ -161,48 +196,22 @@ class EmotionalSoundModel(SoundModel):
     def color_to_properties(self, r, g, b):
         h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
         
-        # Determine emotional profile based on color properties
-        if l > 0.7 and s > 0.5 and (h < 0.2 or h > 0.9): # Bright, saturated warm colors
-            return {
-                'emotion': 'Joy', 'pitch': 400 + l * 400, 'dissonance': 0.01,
-                'timbre_brightness': 0.8, 'adsr': (0.01, 0.2, 0.7, 0.1)
-            }
-        elif l < 0.3 and s > 0.6: # Dark, saturated colors
-            return {
-                'emotion': 'Tension', 'pitch': 150 + l * 100, 'dissonance': 0.1,
-                'timbre_brightness': 0.3, 'adsr': (0.005, 0.05, 0.1, 0.1)
-            }
-        elif s < 0.3 and l > 0.4: # Desaturated, mid-to-bright colors
-            return {
-                'emotion': 'Calm', 'pitch': 200 + l * 200, 'dissonance': 0.005,
-                'timbre_brightness': 0.2, 'adsr': (0.3, 0.2, 0.6, 0.3)
-            }
-        else: # Dark, desaturated colors
-            return {
-                'emotion': 'Sadness', 'pitch': 120 + l * 150, 'dissonance': 0.05,
-                'timbre_brightness': 0.1, 'adsr': (0.4, 0.3, 0.2, 0.4)
-            }
+        if l > 0.7 and s > 0.5 and (h < 0.2 or h > 0.9): return {'emotion': 'Joy', 'pitch': 400 + l * 400, 'dissonance': 0.01, 'timbre_brightness': 0.8, 'adsr': (0.01, 0.2, 0.7, 0.1)}
+        elif l < 0.3 and s > 0.6: return {'emotion': 'Tension', 'pitch': 150 + l * 100, 'dissonance': 0.1, 'timbre_brightness': 0.3, 'adsr': (0.005, 0.05, 0.1, 0.1)}
+        elif s < 0.3 and l > 0.4: return {'emotion': 'Calm', 'pitch': 200 + l * 200, 'dissonance': 0.005, 'timbre_brightness': 0.2, 'adsr': (0.3, 0.2, 0.6, 0.3)}
+        else: return {'emotion': 'Sadness', 'pitch': 120 + l * 150, 'dissonance': 0.05, 'timbre_brightness': 0.1, 'adsr': (0.4, 0.3, 0.2, 0.4)}
 
     def generate_mono_wave(self, props):
-        freq = props['pitch']
-        dissonance = props['dissonance']
-        timbre_brightness = props['timbre_brightness']
+        freq, dissonance, timbre_brightness = props['pitch'], props['dissonance'], props['timbre_brightness']
         attack, decay, sustain, release = props['adsr']
-
-        # Generate base wave with harmonics for timbre control
         wave = np.sin(freq * self.t * 2 * np.pi)
-        for i in range(2, 6):
-            wave += (timbre_brightness / i) * np.sin(freq * i * self.t * 2 * np.pi)
-
-        # Add dissonance
+        for i in range(2, 6): wave += (timbre_brightness / i) * np.sin(freq * i * self.t * 2 * np.pi)
         wave += np.sin(freq * (1 + dissonance) * self.t * 2 * np.pi)
-
-        # Apply ADSR envelope
         envelope = generate_adsr_envelope(attack, decay, sustain, release, len(self.t))
         return wave * envelope
 
 # ==============================================================================
-# 3. UTILITY FUNCTIONS
+# 4. UTILITY FUNCTIONS
 # ==============================================================================
 
 def generate_child_landscape():
@@ -244,7 +253,7 @@ def draw_info_panel(screen, font, data):
         y_offset += 25
 
 # ==============================================================================
-# 4. MAIN APPLICATION LOOP
+# 5. MAIN APPLICATION LOOP
 # ==============================================================================
 
 def main():
@@ -260,21 +269,21 @@ def main():
         face_mesh, cap, face_tracking_active = None, None, False
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("HearSee - Phase 1.3")
+    pygame.display.set_caption("HearSee - Phase 2.1")
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
     
     sound_models = [NaturalisticSoundModel(), SymbolicSoundModel(), EmotionalSoundModel()]
+    feature_analyzer = FacialFeatureAnalyzer()
     current_image = cv2.cvtColor(generate_child_landscape(), cv2.COLOR_BGR2RGB)
+    facial_features = {}
 
     running = True
     while running:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
-                running = False
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE): running = False
             elif event.type == pygame.KEYDOWN:
-                if event.key in [pygame.K_1, pygame.K_2, pygame.K_3]:
-                    g_active_model_index = event.key - pygame.K_1
+                if event.key in [pygame.K_1, pygame.K_2, pygame.K_3]: g_active_model_index = event.key - pygame.K_1
                 elif event.key == pygame.K_l:
                     new_image = load_image_from_file()
                     if new_image is not None: current_image = new_image
@@ -298,14 +307,19 @@ def main():
         if face_tracking_active:
             ret, frame = cap.read()
             if ret:
-                results = face_mesh.process(cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB))
+                image_rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+                results = face_mesh.process(image_rgb)
                 if results.multi_face_landmarks:
-                    face_x, face_y = results.multi_face_landmarks[0].landmark[1].x, results.multi_face_landmarks[0].landmark[1].y
+                    landmarks = results.multi_face_landmarks[0].landmark
+                    face_x, face_y = landmarks[1].x, landmarks[1].y
                     cursor_target_x = (face_x - g_center_offset_x - 0.5) * MOVEMENT_SCALE + 0.5
                     cursor_target_y = (face_y - g_center_offset_y - 0.5) * MOVEMENT_SCALE + 0.5
+                    facial_features = feature_analyzer.analyze(landmarks, WINDOW_WIDTH, WINDOW_HEIGHT)
+                else: facial_features = {}
         else:
             mouse_x, mouse_y = pygame.mouse.get_pos()
             cursor_target_x, cursor_target_y = mouse_x / WINDOW_WIDTH, mouse_y / WINDOW_HEIGHT
+            facial_features = {}
 
         g_smooth_cursor_x = smooth_value(g_smooth_cursor_x, cursor_target_x, SMOOTHING_FACTOR)
         g_smooth_cursor_y = smooth_value(g_smooth_cursor_y, cursor_target_y, SMOOTHING_FACTOR)
@@ -314,7 +328,7 @@ def main():
         
         active_model = sound_models[g_active_model_index]
         pan_value = (final_cursor_x - 0.5) * 2.0
-        audio_wave = active_model.create_stereo_wave(current_image, final_cursor_x, final_cursor_y, pan_value)
+        audio_wave = active_model.create_stereo_wave(current_image, final_cursor_x, final_cursor_y, pan_value, facial_features)
         sound = pygame.sndarray.make_sound(audio_wave)
         sound.play()
 
@@ -326,33 +340,21 @@ def main():
         pygame.draw.circle(screen, (255,255,255), (cursor_px, cursor_py), 12, 2)
         pygame.draw.circle(screen, (0,0,0), (cursor_px, cursor_py), 14, 1)
 
-        info_data = {
-            "Active Model": f"{g_active_model_index+1}: {active_model.name}",
-            "Global Mix": f"{'ON' if g_global_mix_enabled else 'OFF'} (G)",
-            "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)",
-        }
+        info_data = {"Active Model": f"{g_active_model_index+1}: {active_model.name}", "Global Mix": f"{'ON' if g_global_mix_enabled else 'OFF'} (G)", "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)"}
         if g_show_info_panel:
-            # Add emotion to info panel for model 3
             if g_active_model_index == 2:
                 props = active_model.color_to_properties(*get_pixel_color_from_image(current_image, final_cursor_x, final_cursor_y))
                 info_data.update({"Detected Emotion": props['emotion']})
-
-            info_data.update({
-                "--- Controls ---": "",
-                "Blend Radius": f"{BLENDING_RADIUS:.1f} (L/R)",
-                "Blend Intensity": f"{BLENDING_INTENSITY:.1f} (U/D)",
-                "--- Cursor Info ---": "",
-                "Position": f"({final_cursor_x:.2f}, {final_cursor_y:.2f})",
-            })
-            if face_tracking_active:
-                info_data.update({ "Center Offset": f"({g_center_offset_x:.2f}, {g_center_offset_y:.2f}) (SPACE)"})
+            if facial_features:
+                 info_data.update({"--- Face Features ---": "", "Mouth Aspect Ratio": f"{facial_features.get('mouth_aspect_ratio', 0):.2f}", "Lip Curvature": f"{facial_features.get('lip_curvature', 0):.2f}"})
+            info_data.update({"--- Controls ---": "", "Blend Radius": f"{BLENDING_RADIUS:.1f} (L/R)", "Blend Intensity": f"{BLENDING_INTENSITY:.1f} (U/D)", "--- Cursor Info ---": "", "Position": f"({final_cursor_x:.2f}, {final_cursor_y:.2f})"})
+            if face_tracking_active: info_data.update({ "Center Offset": f"({g_center_offset_x:.2f}, {g_center_offset_y:.2f}) (SPACE)"})
         
         draw_info_panel(screen, font, info_data)
-        
         pygame.display.flip()
         clock.tick(30)
 
-    if cap: cap.release()
+    if 'cap' in locals() and cap and cap.isOpened(): cap.release()
     pygame.quit()
 
 if __name__ == "__main__":
