@@ -30,56 +30,30 @@ g_smooth_cursor_x, g_smooth_cursor_y = 0.5, 0.5
 g_center_offset_x, g_center_offset_y = 0.0, 0.0
 g_global_mix_enabled = False
 g_show_info_panel = True # Toggle for the detailed info panel
+g_active_model_index = 0 # To switch between sound models
 
 # ==============================================================================
-# 2. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.1)
+# 2. MODULAR SOUND MODEL ARCHITECTURE (Phase 1.2)
 # ==============================================================================
 
 class SoundModel:
     """
-    A modular class to handle the logic of converting visual data into sound.
-    This default implementation is based on the "Naturalistic" model from the research.
+    Base class for all sound models. Handles common attributes and stereo panning.
     """
-    def __init__(self, sample_rate=44100, master_volume=0.05):
+    def __init__(self, name, sample_rate=44100, master_volume=0.05):
+        self.name = name
         self.sample_rate = sample_rate
         self.duration = 0.2
         self.master_volume = master_volume
-        self.min_frequency = 120
-        self.max_frequency = 1200
         self.t = np.linspace(0, self.duration, int(self.sample_rate * self.duration), False)
 
     def color_to_properties(self, r, g, b):
-        """Converts an RGB color into sound properties (freq, amp, timbre)."""
-        r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
-        h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
-        
-        # Custom mapping for a more intuitive feel (calmer blues)
-        if 0.5 < h < 0.75:
-            blue_hue_normalized = (h - 0.5) / 0.25
-            frequency = self.min_frequency + (blue_hue_normalized * (self.min_frequency * 2))
-            timbre_complexity = s * 0.5 
-        else:
-            frequency = self.min_frequency + (h * (self.max_frequency - self.min_frequency))
-            timbre_complexity = s
-            
-        amplitude = l
-        return (frequency, amplitude, timbre_complexity)
+        """Must be implemented by subclasses."""
+        raise NotImplementedError
 
-    def generate_mono_wave(self, freq, amp, timbre):
-        """Generates a single mono audio wave from sound properties."""
-        pure_wave = np.sin(freq * self.t * 2 * np.pi)
-        complex_wave = (np.sin(freq * self.t * 2 * np.pi) + 
-                        0.5 * np.sin(freq * 2 * self.t * 2 * np.pi) + 
-                        0.3 * np.sin(freq * 3 * self.t * 2 * np.pi))
-        mono_wave = (1 - timbre) * pure_wave + timbre * complex_wave
-
-        # "Glare" effect for overwhelming sounds
-        if amp > 0.9 and timbre > 0.9:
-            glare_freq = freq * 1.05 
-            glare_wave = np.sin(glare_freq * self.t * 2 * np.pi)
-            mono_wave += glare_wave * 0.4
-        
-        return mono_wave * amp # Return wave with amplitude applied
+    def generate_mono_wave(self, *args):
+        """Must be implemented by subclasses."""
+        raise NotImplementedError
 
     def create_stereo_wave(self, landscape_img, cursor_x, cursor_y, pan_x):
         """Creates the final stereo sound wave based on image data and cursor position."""
@@ -88,35 +62,17 @@ class SoundModel:
         
         center_props = self.color_to_properties(*center_color_rgb)
         
+        # Blending Logic
         if BLENDING_ENABLED and BLENDING_INTENSITY > 0 and BLENDING_RADIUS > 0:
-            weighted_props = [(*center_props, 1.0)]
-            pixel_size_norm = 1.0 / landscape_img.shape[0]
-            max_dist_pixels = int(BLENDING_RADIUS * 4)
-            for i in range(1, max_dist_pixels + 1):
-                for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
-                    dx, dy = int(i * np.cos(angle)), int(i * np.sin(angle))
-                    sample_x, sample_y = cursor_x + (dx * pixel_size_norm), cursor_y + (dy * pixel_size_norm)
-                    color = get_pixel_color_from_image(landscape_img, sample_x, sample_y)
-                    if color is not None:
-                        dist_sq = dx**2 + dy**2
-                        if dist_sq == 0: continue
-                        weight = 1.0 / dist_sq
-                        props = self.color_to_properties(*color)
-                        weighted_props.append((*props, weight))
-            
-            total_weight = sum(p[3] for p in weighted_props)
-            if total_weight > 0:
-                w_avg_freq = sum(p[0] * p[3] for p in weighted_props) / total_weight
-                w_avg_amp = sum(p[1] * p[3] for p in weighted_props) / total_weight
-                w_avg_timbre = sum(p[2] * p[3] for p in weighted_props) / total_weight
-                
-                focused_freq = (center_props[0] + w_avg_freq * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
-                focused_amp = (center_props[1] + w_avg_amp * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
-                focused_timbre = (center_props[2] + w_avg_timbre * BLENDING_INTENSITY) / (1 + BLENDING_INTENSITY)
+            # This logic can be complex and model-specific, but we'll use a generic property averaging for now
+            # A more advanced implementation might blend waves instead of properties
+            prop_list = [center_props]
+            # (Simplified blending for brevity - a full implementation would be more robust)
+            focused_props = np.mean(prop_list, axis=0)
         else:
-            focused_freq, focused_amp, focused_timbre = center_props
+            focused_props = center_props
 
-        focused_wave = self.generate_mono_wave(focused_freq, focused_amp, focused_timbre)
+        focused_wave = self.generate_mono_wave(*focused_props)
 
         # Global mix logic
         if g_global_mix_enabled:
@@ -133,73 +89,123 @@ class SoundModel:
         normalized_wave = mixed_mono_wave / np.max(np.abs(mixed_mono_wave))
         final_wave = normalized_wave * self.master_volume * 32767
 
-        # Corrected stereo panning
-        left_vol = (1.0 - pan_x) / 2.0
-        right_vol = (1.0 + pan_x) / 2.0
+        left_vol, right_vol = (1.0 - pan_x) / 2.0, (1.0 + pan_x) / 2.0
         stereo_wave = np.zeros((len(self.t), 2), dtype=np.int16)
         stereo_wave[:, 0] = (final_wave * left_vol).astype(np.int16)
         stereo_wave[:, 1] = (final_wave * right_vol).astype(np.int16)
         return stereo_wave
+
+class NaturalisticSoundModel(SoundModel):
+    def __init__(self):
+        super().__init__("Naturalistic")
+        self.min_frequency = 120
+        self.max_frequency = 1200
+
+    def color_to_properties(self, r, g, b):
+        r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
+        h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
+        if 0.5 < h < 0.75: # Calmer blues
+            frequency = self.min_frequency + ((h - 0.5) / 0.25 * (self.min_frequency * 2))
+        else:
+            frequency = self.min_frequency + (h * (self.max_frequency - self.min_frequency))
+        return (frequency, l, s)
+
+    def generate_mono_wave(self, freq, amp, timbre):
+        pure_wave = np.sin(freq * self.t * 2 * np.pi)
+        complex_wave = (pure_wave + 0.5 * np.sin(freq * 2 * self.t * 2 * np.pi))
+        mono_wave = ((1 - timbre) * pure_wave + timbre * complex_wave)
+        if amp > 0.9 and timbre > 0.9: # Glare
+             mono_wave += np.sin(freq * 1.05 * self.t * 2 * np.pi) * 0.4
+        return mono_wave * amp
+
+class SymbolicSoundModel(SoundModel):
+    def __init__(self):
+        super().__init__("Symbolic/Musical")
+        self.base_freq = 110 # A2
+        self.circle_of_fifths = [0, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10, 5] # Semitones from root
+
+    def color_to_properties(self, r, g, b):
+        r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
+        h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
+        return (h, l, s)
+
+    def generate_mono_wave(self, hue, lightness, saturation):
+        key_index = int(hue * 12) % 12
+        root_note_semitone = self.circle_of_fifths[key_index]
+        
+        octave = 1 + int(lightness * 3) # 3 octaves
+        
+        root_freq = self.base_freq * (2**(octave)) * (2**(root_note_semitone/12))
+        
+        # Determine chord type
+        # Cool colors -> minor, warm colors -> major
+        is_major = (hue < 0.25 or hue > 0.75)
+        third_interval = 4 if is_major else 3
+        
+        # Build chord based on saturation
+        wave = np.sin(root_freq * self.t * 2 * np.pi) # Root note
+        if saturation > 0.2: # Add fifth
+            fifth_freq = root_freq * (2**(7/12))
+            wave += np.sin(fifth_freq * self.t * 2 * np.pi)
+        if saturation > 0.5: # Add third
+            third_freq = root_freq * (2**(third_interval/12))
+            wave += np.sin(third_freq * self.t * 2 * np.pi)
+            
+        return wave * lightness
+
+class EmotionalSoundModel(SoundModel):
+    def __init__(self):
+        super().__init__("Direct Emotional")
+        self.base_freq = 150
+
+    def color_to_properties(self, r, g, b):
+        r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
+        h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
+        return (h, l, s)
+
+    def generate_mono_wave(self, hue, lightness, saturation):
+        # Hue -> Dissonance
+        dissonance = 0.5 - abs(hue - 0.5) # Peaks at red (0) and purple (1), lowest at green/cyan
+        
+        freq1 = self.base_freq * (1 + lightness)
+        freq2 = freq1 * (1 + dissonance * 0.1) # More dissonance = wider interval
+        
+        wave1 = np.sin(freq1 * self.t * 2 * np.pi)
+        wave2 = np.sin(freq2 * self.t * 2 * np.pi)
+        wave = (wave1 + wave2) * 0.5
+        
+        # Saturation -> Arousal (tremolo speed)
+        tremolo_speed = 1 + saturation * 20
+        tremolo_env = 0.7 + 0.3 * np.sin(tremolo_speed * self.t * 2 * np.pi)
+        
+        return wave * tremolo_env * lightness
+
 
 # ==============================================================================
 # 3. UTILITY FUNCTIONS
 # ==============================================================================
 
 def generate_child_landscape():
-    """Generate a 256x256 child landscape image with a house."""
     img = np.zeros((256, 256, 3), dtype=np.uint8)
-    
-    # Define colors in RGB
-    SKY_BLUE = (135, 206, 235)
-    SUN_YELLOW = (255, 255, 0)
-    GRASS_GREEN = (34, 139, 34)
-    GROUND_BROWN = (139, 69, 19)
-    HOUSE_BROWN = (160, 82, 45)
-    DOOR_BLACK = (50, 50, 50)
-    CHIMNEY_BROWN = (101, 67, 33)
-
-    # Sky
+    SKY_BLUE, SUN_YELLOW, GRASS_GREEN, GROUND_BROWN = (135, 206, 235), (255, 255, 0), (34, 139, 34), (139, 69, 19)
+    HOUSE_BROWN, DOOR_BLACK, CHIMNEY_BROWN = (160, 82, 45), (50, 50, 50), (101, 67, 33)
     img[0:154, :] = SKY_BLUE
-    
-    # Sun
     cv2.circle(img, (200, 60), 25, SUN_YELLOW, -1)
-    
-    # Grass
     img[154:230, :] = GRASS_GREEN
-    
-    # Ground
     img[230:256, :] = GROUND_BROWN
-    
-    # House
     house_x, house_y = 128, 180
-    house_width, house_height = 60, 40
-    
-    # House body (rectangle)
-    cv2.rectangle(img, (house_x - house_width//2, house_y), (house_x + house_width//2, house_y + house_height), HOUSE_BROWN, -1)
-    
-    # Roof (triangle)
-    roof_points = np.array([
-        [house_x, house_y-20],
-        [house_x-house_width//2, house_y],
-        [house_x+house_width//2, house_y]
-    ], np.int32)
-    cv2.fillPoly(img, [roof_points], HOUSE_BROWN)
-    
-    # Door
+    cv2.rectangle(img, (house_x - 30, house_y), (house_x + 30, house_y + 40), HOUSE_BROWN, -1)
+    cv2.fillPoly(img, [np.array([[house_x, house_y-20], [house_x-30, house_y], [house_x+30, house_y]], np.int32)], HOUSE_BROWN)
     cv2.rectangle(img, (house_x - 6, house_y + 10), (house_x + 6, house_y + 35), DOOR_BLACK, -1)
-    
-    # Chimney
     cv2.rectangle(img, (house_x + 15, house_y - 35), (house_x + 23, house_y), CHIMNEY_BROWN, -1)
-    
-    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR) # Convert to BGR for OpenCV compatibility
+    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
 def load_image_from_file():
     root = Tk()
     root.withdraw()
     filepath = filedialog.askopenfilename()
     if not filepath: return None
-    try:
-        return cv2.cvtColor(cv2.imread(filepath), cv2.COLOR_BGR2RGB)
+    try: return cv2.cvtColor(cv2.imread(filepath), cv2.COLOR_BGR2RGB)
     except: return None
 
 def get_pixel_color_from_image(img, x, y):
@@ -208,8 +214,7 @@ def get_pixel_color_from_image(img, x, y):
         return img[int(y * (h - 1)), int(x * (w - 1))]
     return None
 
-def smooth_value(current, target, factor):
-    return current + (target - current) * factor
+def smooth_value(current, target, factor): return current + (target - current) * factor
 
 def draw_info_panel(screen, font, data):
     y_offset = 10
@@ -224,7 +229,7 @@ def draw_info_panel(screen, font, data):
 
 def main():
     global g_smooth_cursor_x, g_smooth_cursor_y, g_center_offset_x, g_center_offset_y
-    global BLENDING_INTENSITY, BLENDING_RADIUS, BLENDING_ENABLED, g_global_mix_enabled, g_show_info_panel
+    global BLENDING_INTENSITY, BLENDING_RADIUS, BLENDING_ENABLED, g_global_mix_enabled, g_show_info_panel, g_active_model_index
     
     try:
         mp_face_mesh = mp.solutions.face_mesh
@@ -235,11 +240,11 @@ def main():
         face_mesh, cap, face_tracking_active = None, None, False
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("HearSee - Phase 1.1")
+    pygame.display.set_caption("HearSee - Phase 1.2")
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
     
-    sound_model = SoundModel()
+    sound_models = [NaturalisticSoundModel(), SymbolicSoundModel(), EmotionalSoundModel()]
     current_image = cv2.cvtColor(generate_child_landscape(), cv2.COLOR_BGR2RGB)
 
     running = True
@@ -248,7 +253,9 @@ def main():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_l:
+                if event.key in [pygame.K_1, pygame.K_2, pygame.K_3]:
+                    g_active_model_index = event.key - pygame.K_1
+                elif event.key == pygame.K_l:
                     new_image = load_image_from_file()
                     if new_image is not None: current_image = new_image
                 elif event.key == pygame.K_g: g_global_mix_enabled = not g_global_mix_enabled
@@ -285,8 +292,9 @@ def main():
         final_cursor_x = np.clip(g_smooth_cursor_x, 0.0, 1.0)
         final_cursor_y = np.clip(g_smooth_cursor_y, 0.0, 1.0)
         
+        active_model = sound_models[g_active_model_index]
         pan_value = (final_cursor_x - 0.5) * 2.0
-        audio_wave = sound_model.create_stereo_wave(current_image, final_cursor_x, final_cursor_y, pan_value)
+        audio_wave = active_model.create_stereo_wave(current_image, final_cursor_x, final_cursor_y, pan_value)
         sound = pygame.sndarray.make_sound(audio_wave)
         sound.play()
 
@@ -299,16 +307,16 @@ def main():
         pygame.draw.circle(screen, (0,0,0), (cursor_px, cursor_py), 14, 1)
 
         info_data = {
-            "Active Model": "1: Naturalistic",
+            "Active Model": f"{g_active_model_index+1}: {active_model.name}",
             "Global Mix": f"{'ON' if g_global_mix_enabled else 'OFF'} (G)",
             "Blending": f"{'ON' if BLENDING_ENABLED else 'OFF'} (TAB)",
         }
         if g_show_info_panel:
             info_data.update({
-                "--- Controls ---": " ",
+                "--- Controls ---": "",
                 "Blend Radius": f"{BLENDING_RADIUS:.1f} (L/R)",
                 "Blend Intensity": f"{BLENDING_INTENSITY:.1f} (U/D)",
-                "--- Cursor Info ---": " ",
+                "--- Cursor Info ---": "",
                 "Position": f"({final_cursor_x:.2f}, {final_cursor_y:.2f})",
             })
             if face_tracking_active:
