@@ -44,17 +44,37 @@ g_center_offset_x, g_center_offset_y = 0.0, 0.0
 # ==============================================================================
 
 def generate_child_landscape():
-    """Generates a simple 256x256 pixel image of a landscape to use as a default."""
+    """Generates a simple 256x256 pixel image of a landscape with crayon-like colors."""
+    # Define crayon colors in standard RGB format
+    CRAYON_SKY_BLUE = (135, 206, 235)
+    CRAYON_SUN_YELLOW = (255, 255, 0)
+    CRAYON_GRASS_GREEN = (34, 139, 34)
+    CRAYON_GROUND_BROWN = (139, 69, 19)
+    CRAYON_HOUSE_BROWN = (160, 82, 45)
+
+    # Convert RGB tuples to BGR for OpenCV drawing functions
+    # (OpenCV expects colors in Blue, Green, Red order, so we reverse the tuples)
+    SKY_BGR = CRAYON_SKY_BLUE[::-1]
+    SUN_BGR = CRAYON_SUN_YELLOW[::-1]
+    GRASS_BGR = CRAYON_GRASS_GREEN[::-1] 
+    GROUND_BGR = CRAYON_GROUND_BROWN[::-1]
+    HOUSE_BGR = CRAYON_HOUSE_BROWN[::-1]
+
     img = np.zeros((256, 256, 3), dtype=np.uint8)
-    img[0:154, :] = (135, 206, 235)
-    cv2.circle(img, (200, 60), 25, (255, 255, 0), -1)
-    img[154:230, :] = (34, 139, 34)
-    img[230:256, :] = (139, 69, 19)
+    
+    # Draw shapes using the corrected BGR colors
+    img[0:154, :] = SKY_BGR
+    cv2.circle(img, (200, 60), 25, SUN_BGR, -1)
+    img[154:230, :] = GRASS_BGR
+    img[230:256, :] = GROUND_BGR
+    
     house_x, house_y = 128, 180
     house_width, house_height = 60, 40
-    cv2.rectangle(img, (house_x - house_width//2, house_y), (house_x + house_width//2, house_y + house_height), (160, 82, 45), -1)
+    cv2.rectangle(img, (house_x - house_width//2, house_y), (house_x + house_width//2, house_y + house_height), HOUSE_BGR, -1)
+    
     roof_points = np.array([[house_x, house_y - 20], [house_x - house_width//2, house_y], [house_x + house_width//2, house_y]])
-    cv2.fillPoly(img, [roof_points], (160, 82, 45))
+    cv2.fillPoly(img, [roof_points], HOUSE_BGR)
+    
     return img
 
 def load_image_from_file():
