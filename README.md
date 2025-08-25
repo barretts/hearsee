@@ -4,6 +4,8 @@ HearSee is a real-time sensory substitution tool written in Python that translat
 
 The project is designed to be a flexible platform for exploring different methods of sonification, with the ultimate goal of creating a system that can help a user "hear" the key features of an image, including the mood of a landscape or the smile on a person's face.
 
+<img width="639" height="669" alt="image" src="https://github.com/user-attachments/assets/5dd5d613-4cd2-4b8c-b936-fa59143d6ee7" />
+
 ## Core Features
 
 * **Real-Time Sonification:** Translates images from a webcam or file into sound with minimal latency.
